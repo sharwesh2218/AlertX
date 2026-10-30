@@ -2,10 +2,11 @@ services:
   - type: web
     name: alertx-surveillance
     env: python
-    plan: free # Changed to free tier
+    rootDir: backend
+    plan: free # Free Render RAM (512MB) is likely too small for TensorFlow+PyTorch+CLIP; primary target is Hugging Face Spaces.
     buildCommand: pip install -r requirements.txt
     startCommand: python run.py
-    healthCheckPath: /status
+    healthCheckPath: /health
     envVars:
       - key: ALERTX_CAMERA
         value: "0" # Change this to your RTSP link in Render Dashboard
@@ -23,3 +24,7 @@ services:
         sync: false
       - key: PUBLIC_URL
         sync: false # Set this to your Render URL (e.g. https://alertx.onrender.com)
+      - key: FRONTEND_URL
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false

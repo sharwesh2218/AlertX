@@ -14,16 +14,17 @@ jobs:
           fetch-depth: 0
           lfs: true
 
-      - name: Install and configure Git LFS
-        run: |
-          git lfs install
-          git lfs pull
-
-      - name: Push to hub
+      - name: Push backend to Hugging Face Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        if: ${{ env.HF_TOKEN != '' }}
         run: |
-          git remote add hf https://iam-pradeepkumar:$HF_TOKEN@huggingface.co/spaces/iam-pradeepkumar/AlertX || true
-          git remote set-url hf https://iam-pradeepkumar:$HF_TOKEN@huggingface.co/spaces/iam-pradeepkumar/AlertX
-          git lfs push --all hf main || true
+          git lfs pull
+          rm -rf /tmp/space && mkdir -p /tmp/space/dashboard && cp -a backend/. /tmp/space/ && cp -a frontend/. /tmp/space/dashboard/
+          rm -f /tmp/space/AI-model/best.pt
+          cd /tmp/space
+          git init -b main && git lfs install --local
+          git config user.email "ci@example.com" && git config user.name "ci"
+          git add -A && git commit -m "Deploy backend from ${GITHUB_SHA}"
+          git remote add hf https://iam-pradeepkumar:$HF_TOKEN@huggingface.co/spaces/iam-pradeepkumar/AlertX
           git push --force hf main

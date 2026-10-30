@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AlertX | Enterprise AI Surveillance</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    
+    <!-- Leaflet Maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <link rel="stylesheet" href="style.css?v=2.1">
+</head>
+<body>
+    
+    <!-- ── AUTH OVERLAY ─────────────────── -->
+    <div id="auth-overlay" class="overlay active">
+        <div class="auth-card">
+            <div class="logo">
+                <span class="logo__icon">🛡️</span>
+                <span class="logo__text">Alert<span class="text--accent">X</span></span>
+            </div>
+            <h2>System Authentication</h2>
+            <p class="text--secondary">Access restricted to authorized security administrators</p>
+            
+            <form id="login-form" class="mt-2">
+                <div class="form-group">
+                    <label>Admin ID</label>
+                    <input type="text" id="login-user" required placeholder="admin_portal">
+                </div>
+                <div class="form-group">
+                    <label>Access Key</label>
+                    <input type="password" id="login-pass" required placeholder="••••••••">
+                </div>
+                <button type="submit" class="btn btn--primary btn--block">Sign In</button>
+            </form>
+            
+            <div class="mt-1-5">
+                <p style="font-size: 0.85rem; color: var(--text-secondary)">
+                    New node registration? <a href="#" id="show-signup" class="text--accent">Register</a>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── SIGNUP OVERLAY ────────────────── -->
+    <div id="signup-overlay" class="overlay">
+        <div class="auth-card">
+            <div class="logo">
+                <span class="logo__icon">🛡️</span>
+                <span class="logo__text">Alert<span class="text--accent">X</span></span>
+            </div>
+            <h2>Node Registration</h2>
+            <p class="text--secondary">Enroll a new security monitoring administrator</p>
+            <form id="signup-form" class="mt-2">
+                <div class="form-group">
+                    <label>Target Username</label>
+                    <input type="text" id="signup-user" required>
+                </div>
+                <div class="form-group">
+                    <label>Official Email</label>
+                    <input type="email" id="signup-email" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="signup-pass" required placeholder="••••••••">
+                </div>
+                <div class="form-group">
+                    <label>Personnel Type</label>
+                    <select id="signup-role" style="width: 100%; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border); padding: 0.9rem 1.1rem; color: white; border-radius: 10px; outline: none;">
+                        <option value="official">Government Official</option>
+                    </select>
+                </div>
+                <div id="badge-group" class="form-group">
+                    <label>Official Badge ID</label>
+                    <input type="text" id="signup-badge" placeholder="e.g. AX-9921">
+                </div>
+                <button type="submit" class="btn btn--primary btn--full">Create Account</button>
+            </form>
+            
+            
+            <div class="mt-1-5">
+                <p style="font-size: 0.85rem; color: var(--text-secondary)">
+                    Got access keys? <a href="#" id="show-login" class="text--accent">Login</a>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── SIDEBAR BACKDROP (mobile) ──────── -->
+    <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+
+    <!-- ── MAIN APPLICATION SHELL ────────── -->
+    <div id="app-shell" class="app-shell hidden">
+        
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="logo">
+                <span class="logo__icon">🛡️</span>
+                <span class="logo__text">Alert<span class="text--accent">X</span></span>
+            </div>
+            
+            <nav class="sidebar__nav">
+                <a href="#" class="nav-item active" data-view="dashboard">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#" class="nav-item" data-view="live-map">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                    <span>Geo-Intelligence</span>
+                </a>
+                <a href="#" class="nav-item" data-view="history">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4l3 3m6-3a9 9 0 1 1-9-9 9 9 0 0 1 9 9z"/></svg>
+                    <span>Forensic Archive</span>
+                </a>
+                <a href="#" class="nav-item" data-view="sentinel">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><circle cx="12" cy="11" r="3"/></svg>
+                    <span>Sentinel Intel</span>
+                </a>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <div class="user-profile">
+                    <div class="avatar-box">🛡️</div>
+                    <div class="user-info">
+                        <span id="user-display">Admin</span>
+                        <a href="#" id="btn-logout">Logout</a>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Primary View Area -->
+        <main class="main-stage">
+            <!-- Hamburger Menu (mobile) -->
+            <button id="hamburger-btn" class="hamburger-btn" aria-label="Open menu">☰</button>
+            
+            <!-- Dashboard View -->
+            <div id="view-dashboard" class="view active">
+                <header class="view-header">
+                    <div>
+                        <h1>Security Command</h1>
+                        <p id="system-status-msg">All AI nodes operational | Processing @ 30 FPS</p>
+                    </div>
+                    <div class="status-indicator">
+                        <span class="status-dot status-dot--online" id="status-indicator-dot"></span>
+                        <span id="status-text">Server Online</span>
+                        <button class="btn btn--sm btn--ghost" id="btn-refresh-stats" style="margin-left: 0.8rem;">🔄 Sync</button>
+                    </div>
+                </header>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-card__icon text--accent">📡</div>
+                        <div class="stat-card__content">
+                            <h3 id="stat-total">0</h3>
+                            <p>Global Detections</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card__icon text--critical">🚨</div>
+                        <div class="stat-card__content">
+                            <h3 id="stat-high">0</h3>
+                            <p>Priority Threats</p>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-card__icon text--online">🛡️</div>
+                        <div class="stat-card__content">
+                            <h3>Active</h3>
+                            <p>Node Integrity</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dashboard-grid">
+                    <!-- Column 1: Stream and Controls -->
+                    <div class="col-main grid">
+                        <!-- Stream Panel -->
+                        <div class="panel">
+                            <div class="panel__header">
+                                <h3>● Live Forensic Stream</h3>
+                                <div style="display: flex; gap: 0.5rem">
+                                    <button class="btn btn--sm btn--primary" id="btn-start">Start Node</button>
+                                    <button class="btn btn--sm btn--ghost" id="btn-stop">Offline</button>
+                                </div>
+                            </div>
+                            <div class="feed-wrapper">
+                                <img id="video-feed" src="" alt="Live" class="hidden">
+                                <video id="video-playback" controls class="hidden" style="width: 100%"></video>
+                                <img id="image-playback" class="hidden" style="width: 100%; border-radius: 8px;">
+                                <div id="feed-placeholder" class="feed-placeholder">
+                                    <div style="font-size: 3rem; opacity: 0.1">📹</div>
+                                    <p class="mt-1">Encrypted Node Standby</p>
+                                </div>
+                                <!-- Browser Webcam Elements (used for cloud deployment) -->
+                                <div id="browser-cam-container" class="hidden" style="position: relative; width: 100%;">
+                                    <video id="browser-cam" autoplay playsinline muted style="width:100%; object-fit:contain; border-radius: 8px;"></video>
+                                    <canvas id="overlay-canvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;"></canvas>
+                                </div>
+                                <canvas id="browser-canvas" class="hidden"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Intelligence Node Control -->
+                        <div class="panel node-control">
+                            <div class="panel__header">
+                                <h3>📡 Node Intelligence Control</h3>
+                                <span class="badge badge--offline" id="node-status-badge">Standby</span>
+                            </div>
+                            <div class="panel__content">
+                                <div class="control-section">
+                                    <div class="section-title">Vision Input Configuration</div>
+                                    <div class="input-group">
+                                        <input type="text" id="cam-source" placeholder="Source Index or URL" value="0">
+                                        <button class="btn btn--primary btn--sm" id="btn-apply-source">Link Source</button>
+                                    </div>
+                                    <p class="section-hint">Supports local camera indices (0-9) or encrypted RTSP/HTTP stream URLs.</p>
+                                </div>
+
+                                <div class="control-section">
+                                    <div class="section-title">Emergency AI Dispatch Protocol</div>
+                                    <div class="dispatch-grid">
+                                        <button class="dispatch-btn" data-service="police">
+                                            <span class="icon">🚓</span>
+                                            <span class="dispatch-btn__label">Police</span>
+                                        </button>
+                                        <button class="dispatch-btn" data-service="ambulance">
+                                            <span class="icon">🚑</span>
+                                            <span class="dispatch-btn__label">Ambulance</span>
+                                        </button>
+                                        <button class="dispatch-btn" data-service="fire">
+                                            <span class="icon">🚒</span>
+                                            <span class="dispatch-btn__label">Fire Dept</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Forensic Link Section -->
+                        <div class="panel">
+                            <div class="panel__header"><h3>Digital Evidence Analysis</h3></div>
+                            <div class="upload-area">
+                                <div class="upload-box" id="upload-zone">
+                                    <input type="file" id="file-input" class="hidden" accept="video/*">
+                                    <div id="upload-content">
+                                        <div class="icon">📁</div>
+                                        <p id="upload-status-text">Drop Forensic Video for AI Inspection</p>
+                                    </div>
+                                    <p id="upload-status" style="margin-top:0.5rem;"></p>
+                                    <div id="upload-progress-container" class="hidden mt-1-5" style="width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 10px; overflow: hidden">
+                                        <div id="upload-progress" style="height: 100%; background: var(--accent); width: 0%; transition: 0.4s"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Column 2: Event Log -->
+                    <div class="col-side panel events-section">
+                        <div class="panel__header">
+                            <h3>Activity Log</h3>
+                            <select id="filter-type" class="select-filter">
+                                <option value="">Global Feed</option>
+                                <optgroup label="Filter by Priority">
+                                    <option value="p:CRITICAL">Critical Threats</option>
+                                    <option value="p:HIGH">High Priority</option>
+                                    <option value="p:MEDIUM">Standard Events</option>
+                                </optgroup>
+                                <optgroup label="Filter by Incident">
+                                    <option value="t:fire">Fire / Smoke</option>
+                                    <option value="t:weapon">Weapon Detected</option>
+                                    <option value="t:fight">Physical Conflict</option>
+                                    <option value="t:crowd">Large Crowd</option>
+                                </optgroup>
+                            </select>
+                        </div>
+                        <div class="scroll-pane" id="event-log-container">
+                            <ul id="event-list" class="event-list"></ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Operational Map View -->
+            <div id="view-live-map" class="view">
+                <header class="view-header">
+                    <h1>Operational Intelligence Map</h1>
+                </header>
+                <div class="map-grid" style="display: grid; grid-template-columns: 3fr 1fr; gap: 1.5rem; height: 70vh">
+                    <div class="panel">
+                        <div id="map" style="height: 100%; width: 100%"></div>
+                    </div>
+                    <div class="panel scroll-pane">
+                        <div class="panel__header" style="display: flex; align-items: center; justify-content: space-between; gap: 5px; padding: 10px 15px;">
+                            <h3 style="font-size: 1rem; white-space: nowrap; margin: 0; color: white;">Nearby Units</h3>
+                            <div id="live-sector-time" style="font-size: 0.7rem; color: var(--accent); font-family: 'JetBrains Mono', monospace; background: rgba(0, 0, 0, 0.5); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.05); white-space: nowrap;"></div>
+                        </div>
+                        <div id="nearby-services" style="display: flex; flex-direction: column; gap: 1rem; padding: 1rem 0;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Forensic Archive View -->
+            <div id="view-history" class="view">
+                <header class="view-header">
+                    <h1>Evidence Archive</h1>
+                </header>
+                <div class="panel scroll-pane" style="height: 75vh">
+                    <ul id="history-list" class="event-list"></ul>
+                </div>
+            </div>
+
+            <!-- Sentinel Incident Intelligence View -->
+            <div id="view-sentinel" class="view">
+                <header class="view-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                    <div>
+                        <h1>AlertX Sentinel</h1>
+                        <p class="text--secondary">Evidence-backed incident intelligence, situational briefings, and guided operator response</p>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button id="sentinel-refresh-btn" class="btn btn--ghost btn--sm">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/></svg>
+                            Refresh
+                        </button>
+                    </div>
+                </header>
+
+                <div class="sentinel-container">
+                    <!-- Left Column: Incident Stream / Selector -->
+                    <div class="panel sentinel-sidebar-panel">
+                        <div class="panel__header" style="margin-bottom: 0.75rem;">
+                            <h3>Incident Stream</h3>
+                            <span id="sentinel-count-badge" class="tag tag--medium">0 Events</span>
+                        </div>
+                        <div class="scroll-pane" style="height: calc(75vh - 65px); overflow-y: auto;">
+                            <ul id="sentinel-incident-list" class="event-list">
+                                <!-- Populated dynamically -->
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Active Incident Dossier & Guided Response -->
+                    <div class="panel sentinel-detail-panel scroll-pane" style="height: 75vh; overflow-y: auto;">
+                        <div id="sentinel-empty-state" style="padding: 3rem 1.5rem; text-align: center; color: var(--text-secondary);">
+                            <div style="font-size: 2.5rem; margin-bottom: 1rem;">🛡️</div>
+                            <h3>Select an incident from the stream to inspect</h3>
+                            <p style="font-size: 0.9rem; margin-top: 0.5rem;">Sentinel synthesizes raw multi-agent telemetry into evidence-backed operator briefings.</p>
+                        </div>
+
+                        <div id="sentinel-dossier" class="hidden">
+                            <!-- Dossier Header & Badges -->
+                            <div class="sentinel-dossier-header" style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid var(--border); padding-bottom: 1rem; margin-bottom: 1rem;">
+                                <div>
+                                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+                                        <span id="sentinel-dossier-id" style="font-family: monospace; font-size: 0.85rem; color: var(--accent); background: rgba(99, 102, 241, 0.15); padding: 2px 8px; border-radius: 4px;">#ID</span>
+                                        <span id="sentinel-dossier-prio" class="tag tag--critical">CRITICAL</span>
+                                        <span id="sentinel-dossier-status" class="tag tag--medium">PENDING_REVIEW</span>
+                                    </div>
+                                    <h2 id="sentinel-dossier-title" style="font-size: 1.35rem; margin: 0;">Category Detected</h2>
+                                    <p id="sentinel-dossier-time" class="text--secondary" style="font-size: 0.85rem; margin-top: 0.25rem;">Timestamp</p>
+                                </div>
+                                <div class="sentinel-actions" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                    <button id="sentinel-export-json-btn" class="btn btn--ghost btn--sm" title="Export sanitized JSON report">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                        JSON
+                                    </button>
+                                    <button id="sentinel-export-html-btn" class="btn btn--ghost btn--sm" title="Export standalone printable HTML report">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                                        Dossier HTML
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Metadata Grid -->
+                            <div class="sentinel-meta-grid">
+                                <div class="sentinel-meta-item">
+                                    <span class="sentinel-meta-label">Sensor Source</span>
+                                    <span id="sentinel-meta-source" class="sentinel-meta-value">Source</span>
+                                </div>
+                                <div class="sentinel-meta-item">
+                                    <span class="sentinel-meta-label">Algorithmic Confidence</span>
+                                    <span id="sentinel-meta-conf" class="sentinel-meta-value">0%</span>
+                                </div>
+                                <div class="sentinel-meta-item">
+                                    <span class="sentinel-meta-label">Verification Status</span>
+                                    <span id="sentinel-meta-ack" class="sentinel-meta-value">Pending Review</span>
+                                </div>
+                                <div class="sentinel-meta-item">
+                                    <span class="sentinel-meta-label">Evidence Media</span>
+                                    <span id="sentinel-meta-evidence" class="sentinel-meta-value">No Media Attached</span>
+                                </div>
+                            </div>
+
+                            <!-- Evidence Media Preview (if attached) -->
+                            <div id="sentinel-evidence-container" class="sentinel-card hidden" style="margin-top: 1rem;">
+                                <div class="sentinel-card-title">Visual Evidence Frame</div>
+                                <div id="sentinel-media-box" style="margin-top: 0.5rem; max-height: 260px; overflow: hidden; border-radius: 8px; border: 1px solid var(--border); display: flex; justify-content: center; background: #000;">
+                                    <img id="sentinel-media-img" src="" alt="Evidence Frame" style="max-height: 260px; max-width: 100%; object-fit: contain;">
+                                </div>
+                            </div>
+
+                            <!-- Reported Event & Situation -->
+                            <div class="sentinel-card" style="margin-top: 1rem;">
+                                <div class="sentinel-card-title">Reported Event & Telemetry</div>
+                                <p id="sentinel-reported-event" style="margin-top: 0.5rem; font-size: 0.95rem; line-height: 1.5; color: var(--text-primary);"></p>
+                            </div>
+
+                            <!-- Known Facts vs Uncertainties (2 columns) -->
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem;" class="sentinel-facts-grid">
+                                <div class="sentinel-card">
+                                    <div class="sentinel-card-title" style="color: var(--online);">Known Telemetry Facts</div>
+                                    <ul id="sentinel-known-facts" class="sentinel-list" style="margin-top: 0.5rem;"></ul>
+                                </div>
+                                <div class="sentinel-card">
+                                    <div class="sentinel-card-title" style="color: var(--warning);">Uncertainties & Caveats</div>
+                                    <ul id="sentinel-uncertainties" class="sentinel-list" style="margin-top: 0.5rem;"></ul>
+                                </div>
+                            </div>
+
+                            <!-- Recommended Operator Response Protocol -->
+                            <div class="sentinel-card" style="margin-top: 1rem;">
+                                <div class="sentinel-card-title" style="color: var(--accent);">Recommended SOP Response</div>
+                                <div id="sentinel-recommendations" style="margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem;"></div>
+                            </div>
+
+                            <!-- Guided Response Checklist -->
+                            <div class="sentinel-card" style="margin-top: 1rem;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                                    <div>
+                                        <div class="sentinel-card-title">Operator Response Checklist</div>
+                                        <p class="text--secondary" style="font-size: 0.8rem; margin-top: 2px;">Standard operational verification workflow before resolving</p>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                        <span id="sentinel-checklist-progress" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);">0 / 6 Completed</span>
+                                        <button id="sentinel-ack-btn" class="btn btn--primary btn--sm">
+                                            Acknowledge Incident
+                                        </button>
+                                    </div>
+                                </div>
+                                <div style="margin-top: 0.75rem; background: rgba(255,255,255,0.05); height: 6px; border-radius: 3px; overflow: hidden;">
+                                    <div id="sentinel-progress-bar" style="background: var(--accent); height: 100%; width: 0%; transition: width 0.3s ease;"></div>
+                                </div>
+                                <div id="sentinel-checklist-items" style="margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem;">
+                                    <!-- Populated dynamically -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Persistent Notify Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="config.js?v=1"></script>
+    <script src="app.js?v=2.1"></script>
+</body>
+</html>

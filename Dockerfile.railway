@@ -1,0 +1,42 @@
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PORT=8080 \
+    TF_CPP_MIN_LOG_LEVEL=2 \
+    TF_USE_LEGACY_KERAS=1 \
+    YOLO_CONFIG_DIR=/tmp/Ultralytics \
+    OMP_NUM_THREADS=2 \
+    MKL_NUM_THREADS=2 \
+    OPENBLAS_NUM_THREADS=2 \
+    MALLOC_ARENA_MAX=2
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 git \
+    && (apt-get install -y --no-install-recommends libglib2.0-0t64 || apt-get install -y --no-install-recommends libglib2.0-0) \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp/build
+COPY backend/requirements.txt .
+RUN pip install "setuptools<81" wheel \
+    && pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu \
+    && pip install "tensorflow-cpu>=2.16.0" tf-keras \
+    && grep -v "^tensorflow" requirements.txt > reqs_cpu.txt \
+    && pip install --no-build-isolation -r reqs_cpu.txt \
+    && rm -rf /tmp/build
+
+RUN useradd -m -u 1000 user
+USER user
+ENV HOME=/home/user
+WORKDIR /home/user/app
+
+# Bundle backend + frontend dashboard (with Sentinel Intel) into one full-stack container
+COPY --chown=user:user backend/ .
+COPY --chown=user:user frontend/ ./dashboard/
+
+RUN mkdir -p uploads logs && (python -c "import clip; clip.load('ViT-B/32', device='cpu')" || true)
+
+EXPOSE 8080
+CMD ["python", "run.py"]
+

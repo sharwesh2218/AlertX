@@ -1,0 +1,868 @@
+"""
+AlertX — FastAPI Backend
+Serves live video feed, upload/analysis endpoints, and event API.
+"""
+
+import asyncio
+import base64
+import logging
+import os
+import time
+import threading
+import uuid
+import shutil
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from typing import List, Optional, Dict
+from io import BytesIO
+
+import cv2
+import numpy as np
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Depends, Response, Header
+import html as html_lib
+from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse, FileResponse
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+
+from backend.auth import (
+    get_password_hash, 
+    verify_password, 
+    create_access_token, 
+    get_current_user,
+    DISPATCH_SERVICES,
+    verify_dispatch_token,
+    verify_bearer_header,
+)
+from backend.models import get_db, User, Event, SQLALCHEMY_DATABASE_URL
+from utils.firebase_service import init_firebase, get_firestore
+from backend.config import (
+    BASE_DIR,
+    UPLOAD_DIR,
+    HOST,
+    PORT,
+    FRAME_WIDTH,
+    FRAME_HEIGHT,
+    FPS_LIMIT,
+    PUBLIC_URL,
+    FRONTEND_URL,
+    ALLOWED_ORIGINS,
+    DISPATCH_PHONE_NUMBER,
+)
+from backend.event_store import EventStore
+from pipeline.frame_grabber import FrameGrabber
+from utils.vapi_service import trigger_ai_dispatch
+from pipeline.detector import YOLODetector
+from agents.detection_agent import DetectionAgent
+from agents.threat_agent import ThreatAnalysisAgent
+from agents.decision_agent import DecisionAgent
+from agents.alert_agent import AlertAgent
+from agents.learning_agent import LearningAgent
+from agents.violence_agent import ViolenceAgent
+from agents.sentinel_agent import SentinelAgent
+
+# ──────────────────────────────────────────────
+# Logging
+# ──────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s │ %(name)-28s │ %(levelname)-7s │ %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("alertx.server")
+
+# ──────────────────────────────────────────────
+# App
+# ──────────────────────────────────────────────
+app = FastAPI(
+    title="AlertX — AI Surveillance Platform",
+    version="1.0.0",
+    description="Real-time incident detection from live CCTV and uploaded video.",
+)
+init_firebase() # Start Firebase
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Serve upload files for playback
+if os.path.isdir(UPLOAD_DIR):
+    app.mount("/media", StaticFiles(directory=UPLOAD_DIR), name="media")
+
+# ──────────────────────────────────────────────
+# Singletons
+# ──────────────────────────────────────────────
+event_store = EventStore()
+detector = YOLODetector()
+frame_grabber: Optional[FrameGrabber] = None
+
+# Agent pipeline
+detection_agent = DetectionAgent()
+threat_agent = ThreatAnalysisAgent()
+decision_agent = DecisionAgent()
+alert_agent = AlertAgent()
+learning_agent = LearningAgent()
+violence_agent = ViolenceAgent()
+sentinel_agent = SentinelAgent()
+
+_processing_live = False
+_live_thread: Optional[threading.Thread] = None
+_latest_annotated_frame: Optional[np.ndarray] = None
+_last_frame_id = -1
+_latest_encoded_frame = None
+_last_encoded_frame_id = -1
+
+# Optimization helpers
+agent_executor = ThreadPoolExecutor(max_workers=3)
+_is_processing_incident = False # Busy lock to prevent lag during heavy analysis
+_last_high_priority_event = None # Store context for Voice AI
+_stream_tickets: Dict[str, float] = {}
+_last_activity_time = 0.0 # Track any camera activity (server or browser)
+
+@app.on_event("startup")
+async def startup_event():
+    """Startup initialization and model loading."""
+    logger.info(
+        f"AlertX backend starting: PUBLIC_URL={PUBLIC_URL} FRONTEND_URL={FRONTEND_URL} ALLOWED_ORIGINS={ALLOWED_ORIGINS}"
+    )
+    if os.getenv("SPACE_HOST") and "localhost" in PUBLIC_URL:
+        logger.warning("SPACE_HOST is set but PUBLIC_URL contains 'localhost'. Check your PUBLIC_URL configuration!")
+    if not os.getenv("SECRET_KEY"):
+        logger.warning("SECRET_KEY env var is missing! Ephemeral key in use; tokens will reset on restart.")
+    print("🚀 Pre-loading YOLO model...")
+    detector.load()
+    print("✅ Model ready.")
+_alert_recipient = ""
+_last_high_priority_event = "No recent incident recorded."
+
+# Load persistent recipient if exists
+if os.path.exists(".recipient"):
+    try:
+        with open(".recipient", "r") as f:
+            _alert_recipient = f.read().strip()
+    except:
+        pass
+# Fallback to env
+if not _alert_recipient:
+    _alert_recipient = os.getenv("MAIL_RECIPIENT", "")
+
+
+@app.get("/dispatch/{service}")
+async def dispatch_service(
+    service: str,
+    t: Optional[str] = Query(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    """Trigger AI Voice call to your personal number regarding a service."""
+    service = service.lower()
+    if service not in DISPATCH_SERVICES:
+        raise HTTPException(status_code=404, detail="Unknown service")
+
+    # Authorised by EITHER a signed expiring link token (emails) OR a dashboard bearer JWT
+    if not (verify_dispatch_token(service, t) or verify_bearer_header(authorization)):
+        raise HTTPException(status_code=403, detail="Invalid or expired dispatch token")
+
+    safe_service = html_lib.escape(service.upper())
+    safe_incident = html_lib.escape(str(_last_high_priority_event))
+
+    # Use your personal number for all alerts if set
+    target_number = DISPATCH_PHONE_NUMBER
+    
+    if not target_number:
+        return HTMLResponse(content="""
+            <html>
+                <body style="font-family: sans-serif; text-align: center; padding-top: 100px; background: #0a0a0f; color: white;">
+                    <h1 style="color: #ef4444;">❌ No Phone Number Set</h1>
+                    <p>Please add DISPATCH_PHONE_NUMBER to your .env file.</p>
+                </body>
+            </html>
+        """)
+
+    success = trigger_ai_dispatch(
+        service=service.upper(),
+        incident_details=_last_high_priority_event,
+        destination_number=target_number
+    )
+    
+    return HTMLResponse(content=f"""
+        <html>
+            <body style="font-family: sans-serif; text-align: center; padding-top: 100px; background: #0a0a0f; color: white;">
+                <h1 style="color: #4ade80;">✅ Dispatch Triggered!</h1>
+                <p>AI Voice Agent is calling the {safe_service} now.</p>
+                <p style="color: #8b8ba3; font-size: 0.8rem;">Incident: {safe_incident}</p>
+                <button onclick="window.close()" style="padding: 10px 20px; border-radius: 5px; cursor: pointer;">Close Window</button>
+            </body>
+        </html>
+    """)
+
+
+# ── Autonomous Dispatch ──────────────────────
+class SignupRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+    role: Optional[str] = "civilian"
+    badge_id: Optional[str] = ""
+
+@app.post("/auth/signup")
+async def signup(request: SignupRequest, db = Depends(get_db)):
+    """Create a new user account."""
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database link offline. Please restore credentials.json.")
+        
+    # Check if user exists (Firebase mode)
+    existing_user = db.get_user(request.username)
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    
+    hashed_password = get_password_hash(request.password)
+    success = db.save_user(request.username, request.email, hashed_password, request.role, request.badge_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save user data to cloud.")
+        
+    return {"status": "success", "message": "User created successfully"}
+
+@app.post("/auth/login")
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db = Depends(get_db)):
+    """Verify user and return JWT token."""
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database link offline. Please restore credentials.json.")
+
+    user_data = db.get_user(form_data.username)
+    if not user_data or not verify_password(form_data.password, user_data.get("hashed_password")):
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    
+    access_token = create_access_token(data={"sub": user_data["username"]})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse, FileResponse
+
+@app.get("/download/db")
+async def download_db(current_user: str = Depends(get_current_user)):
+    """Allow downloading the SQLite database file for forensic analysis."""
+    db_path = "alertx.db"
+    if os.path.exists(db_path):
+        return FileResponse(db_path, filename="alertx_forensics.db")
+    raise HTTPException(status_code=404, detail="Database file not found")
+
+@app.get("/events")
+async def get_events(
+    limit: int = 50,
+    incident_type: Optional[str] = None,
+    priority: Optional[str] = None,
+    db = Depends(get_db),
+    current_user: str = Depends(get_current_user),
+):
+    """Fetch events (Hybird: Firebase + Recent Memory)."""
+    try:
+        # Get from Firebase
+        formatted = db.get_events(limit)
+        
+        # Also include recent memory events if DB is empty
+        if not formatted:
+            mem_events = event_store.get_events(limit=limit, incident_type=incident_type, priority=priority)
+            formatted = mem_events
+        
+        return {"status": "success", "events": formatted}
+    except Exception as err:
+        logger.error(f"Event Fetch Error: {err}")
+        return {"status": "error", "events": []}
+
+@app.get("/events/db")
+async def get_db_events(limit: int = 50, db: Session = Depends(get_db), current_user: str = Depends(get_current_user)):
+    """Fetch persistent events from the SQLite database."""
+    events = db.query(Event).order_by(Event.timestamp.desc()).limit(limit).all()
+    return events
+
+@app.get("/auth/me")
+async def read_users_me(current_user: str = Depends(get_current_user)):
+    return {"username": current_user}
+
+@app.post("/auth/stream-token")
+async def get_stream_token(current_user: str = Depends(get_current_user)):
+    """Generate a high-security ticket for the video stream."""
+    ticket = str(uuid.uuid4())
+    # Store ticket with 60s expiry
+    _stream_tickets[ticket] = time.time() + 60
+    return {"ticket": ticket}
+@app.post("/settings/alert-recipient")
+async def update_alert_recipient(email: str = Query(...), current_user: str = Depends(get_current_user)):
+    global _alert_recipient
+    _alert_recipient = email
+    # Persist to disk
+    with open(".recipient", "w") as f:
+        f.write(_alert_recipient)
+    return {"status": "success", "recipient": _alert_recipient}
+
+
+def _bg_agent_task(frame_result, source, frame_index, recipient):
+    """Background task runner for the agent pipeline."""
+    global _is_processing_incident, _last_high_priority_event
+    try:
+        _is_processing_incident = True
+        data = {
+            "frame_result": frame_result,
+            "source": source,
+            "frame_index": frame_index,
+            "recipient_override": recipient
+        }
+        # Run full agent chain
+        # Run full mission-critical agent chain
+        data = detection_agent.process(data)
+        data = threat_agent.process(data)
+        data = violence_agent.process(data) # Secondary Scene Validation
+        data = decision_agent.process(data) # Restored: This sets the priority!
+        data = alert_agent.process(data)
+        data = learning_agent.process(data)
+        data = sentinel_agent.process(data)
+        
+        # Save context for potential Voice AI dispatch
+        if data.get("high_priority_summary"):
+            _last_high_priority_event = data["high_priority_summary"]
+            
+        # ── PERSIST TO DATABASE ──────────────────────
+        # Use the agent-enriched incidents (they carry priority/severity); fall back to raw ones.
+        # NOTE: the in-memory EventStore is written once, by AlertAgent.
+        incidents_all = data.get("incidents") or frame_result.incidents
+        if incidents_all:
+            try:
+                # Save to persistent Firebase
+                try:
+                    # Get priority from the first high-priority incident
+                    top_priority = "MEDIUM"
+                    for i in incidents_all:
+                        if i.get("severity_score", 0) > 0.8:
+                            top_priority = "CRITICAL"
+                            break
+                        elif i.get("severity_score", 0) > 0.6:
+                            top_priority = "HIGH"
+                            
+                    # Smart Save: Only save the highest priority incidents
+                    high_priority_incidents = [i for i in incidents_all if i.get("severity_score", 0) > 0.6]
+                    incidents_to_save = high_priority_incidents if high_priority_incidents else incidents_all
+
+                    for inc in incidents_to_save:
+                        # Ensure we get the best possible priority
+                        final_priority = inc.get("priority", top_priority)
+                        if "fight" in inc.get("type", "").lower() or "violence" in inc.get("type", "").lower():
+                            final_priority = "CRITICAL"
+
+                        event_data = {
+                            "incident_type": inc.get("type", "unknown").upper(),
+                            "confidence": float(inc.get("confidence", 0.0)),
+                            "priority": final_priority,
+                            "source": source,
+                            "description": data.get("high_priority_summary") or f"Detected {inc.get('type')} in the area.",
+                            "timestamp_iso": datetime.utcnow().isoformat()
+                        }
+                        # Save via DBStore helper
+                        from backend.models import DBStore
+                        DBStore.save_event(event_data)
+                    logger.info(f"Firebase Cloud: Saved {len(incidents_to_save)} priority incidents.")
+                except Exception as dbe:
+                    logger.error(f"Firebase Save Error: {dbe}")
+            except Exception as e_mem:
+                logger.error(f"Event Store Error: {e_mem}")
+            
+    except Exception as e:
+        logger.error(f"Background Agent Error: {e}")
+    finally:
+        _is_processing_incident = False
+
+_last_pipeline_run = 0.0
+
+def run_agent_pipeline(frame_result, source="live", frame_index=0):
+    """Offloads the agent pipeline to a background thread to prevent camera lag."""
+    global _is_processing_incident, _last_pipeline_run
+    
+    # PERFORMANCE: Only run the heavy agent pipeline every 2 seconds for a specific incident
+    # This prevents the CPU from choking when detection is active
+    if _is_processing_incident or (time.time() - _last_pipeline_run < 2.0):
+        return
+        
+    _last_pipeline_run = time.time()
+    global _alert_recipient
+    # Submit to worker pool
+    agent_executor.submit(_bg_agent_task, frame_result, source, frame_index, _alert_recipient)
+
+
+# ──────────────────────────────────────────────
+# Live processing loop
+# ──────────────────────────────────────────────
+# Global buffer for the latest annotated frame (to avoid lag in video_feed)
+_latest_annotated_frame = None
+_latest_encoded_frame = None  # Performance: Cache the JPEG to save CPU
+_last_encoded_frame_id = -1
+
+def _live_processing_loop():
+    """Background thread that grabs frames, runs detection, and feeds agents."""
+    global _processing_live, _latest_annotated_frame, _last_frame_id
+    frame_idx = 0
+    # Process at slightly lower frequency to keep CPU cool
+    interval = 1.0 / 30.0 # max 30 fps capture
+
+    while _processing_live and frame_grabber and frame_grabber.is_running:
+        start_time = time.time()
+        frame = frame_grabber.get_frame()
+        if frame is None:
+            time.sleep(0.01)
+            continue
+
+        # LAG FIX: Optimized skipping for responsive real-time monitoring
+        # Since imgsz is now 320, we can detect more frequently
+        skip_factor = 10 if _is_processing_incident else 5
+        
+        if frame_idx % skip_factor == 0:
+            try:
+                # Optimized Detection
+                result = detector.detect(frame)
+                _latest_annotated_frame = result.annotated_frame
+                _last_frame_id = frame_idx
+                
+                global _last_activity_time
+                _last_activity_time = time.time()
+                
+                if result.incidents:
+                    run_agent_pipeline(result, source="live", frame_index=frame_idx)
+            except Exception as e:
+                logger.error(f"Detection error: {e}")
+
+        frame_idx += 1
+        
+        # Adaptive sleep: ensure we stay at roughly 30 FPS for the grabber
+        elapsed = time.time() - start_time
+        sleep_time = max(0, interval - elapsed)
+        time.sleep(sleep_time)
+
+
+# ══════════════════════════════════════════════
+# ROUTES
+# ══════════════════════════════════════════════
+
+@app.get("/health")
+async def health():
+    """Unauthenticated, lightweight health check."""
+    return {"status": "ok", "model_loaded": detector.is_loaded}
+
+
+@app.get("/")
+async def serve_dashboard():
+    """Serve the dashboard UI (bundled `dashboard/` or repo `frontend/`), else API overview."""
+    for candidate in (
+        os.path.join(BASE_DIR, "dashboard", "index.html"),
+        os.path.join(os.path.dirname(BASE_DIR), "frontend", "index.html"),
+    ):
+        if os.path.isfile(candidate):
+            return FileResponse(candidate)
+    return {
+        "service": "AlertX API",
+        "status": "ok",
+        "docs": "/docs",
+        "frontend": FRONTEND_URL,
+    }
+
+
+# ── Video Feed ─────────────────────────────────
+def _get_latest_frame():
+    """Fetch and encode the latest annotated frame, with caching."""
+    global _latest_annotated_frame, _latest_encoded_frame, _last_encoded_frame_id
+    
+    if _latest_annotated_frame is None:
+        return None
+
+    # Performance: Only re-encode if it's a NEW frame
+    if _last_encoded_frame_id == _last_frame_id and _latest_encoded_frame is not None:
+        return _latest_encoded_frame
+        
+    # Downscale and compress even more for cloud speed
+    out = _latest_annotated_frame
+    h, w = out.shape[:2]
+    new_w = 400
+    new_h = int(h * (400 / w))
+    small_frame = cv2.resize(out, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+    _, buffer = cv2.imencode(".jpg", small_frame, [cv2.IMWRITE_JPEG_QUALITY, 20])
+    
+    _latest_encoded_frame = buffer.tobytes()
+    _last_encoded_frame_id = _last_frame_id
+    return _latest_encoded_frame
+
+def _video_generator():
+    """Generator for MJPEG stream with zero-latency frame skipping."""
+    while True:
+        if not _processing_live:
+            break
+            
+        if frame_grabber and frame_grabber.is_running:
+            frame_bytes = _get_latest_frame()
+            if frame_bytes:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
+                )
+        
+        # Performance: Lower wait time for higher FPS
+        time.sleep(0.01)
+
+@app.get("/video_feed")
+async def video_feed(ticket: str = Query(...)):
+    """Video streaming route. Uses high-security one-time tickets."""
+    expiry = _stream_tickets.get(ticket)
+    
+    # 1. Check if valid
+    if not expiry or time.time() > expiry:
+        if ticket in _stream_tickets: 
+            del _stream_tickets[ticket]
+        logger.warning(f"SECURITY ALERT: Unauthorized access attempt to live feed (Invalid Ticket: {ticket[:8]})")
+        raise HTTPException(status_code=401, detail="Stream ticket invalid or expired")
+    
+    # 2. CONSUME TICKET (One-Time Use Security)
+    # This prevents hackers from copying the stream URL and viewing it elsewhere!
+    del _stream_tickets[ticket]
+    
+    logger.info(f"Stream access authorized securely via one-time ticket {ticket[:8]}...")
+    
+    return StreamingResponse(
+        _video_generator(), 
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+# ── Camera Control ─────────────────────────────
+@app.post("/camera/start")
+async def start_camera(source: str = Query(default="0"), current_user: str = Depends(get_current_user)):
+    """Start the live camera feed and processing."""
+    global frame_grabber, _processing_live, _live_thread
+
+    if frame_grabber and frame_grabber.is_running:
+        return {"status": "already_running"}
+
+    # Load model if needed
+    if not detector.is_loaded:
+        detector.load()
+
+    frame_grabber = FrameGrabber(source=source)
+    success = frame_grabber.start()
+    if not success:
+        # Returning 404 instead of 500 to signal "no camera" cleanly to the frontend
+        raise HTTPException(status_code=404, detail=f"Camera source unavailable: {source}")
+
+    # Start processing thread
+    _processing_live = True
+    _live_thread = threading.Thread(target=_live_processing_loop, daemon=True)
+    _live_thread.start()
+
+    logger.info(f"Camera started — source={source}")
+    return {"status": "started", "source": source}
+
+
+@app.post("/camera/stop")
+async def stop_camera(current_user: str = Depends(get_current_user)):
+    """Stop the live camera feed."""
+    global frame_grabber, _processing_live
+
+    _processing_live = False
+    if frame_grabber:
+        frame_grabber.stop()
+        frame_grabber = None
+    return {"status": "stopped"}
+
+
+@app.get("/status")
+async def system_status(current_user: str = Depends(get_current_user)):
+    """System health and node status."""
+    is_active = (frame_grabber is not None and frame_grabber.is_running) or \
+                (time.time() - _last_activity_time < 10.0)
+                
+    return {
+        "status": "online",
+        "camera_active": is_active,
+        "processing_active": _processing_live,
+        "is_incident_active": _is_processing_incident,
+        "model_loaded": detector.is_loaded,
+        "weapon_model": detector.weapon_ok,
+        "alert_recipient": _alert_recipient,
+        "db_mode": "Cloud (Firebase)",
+        "last_sync": datetime.now().isoformat(),
+        "agents": {
+            "detection": detection_agent.stats,
+            "threat_analysis": threat_agent.stats,
+            "decision": decision_agent.stats,
+            "alert": alert_agent.stats,
+            "learning": learning_agent.stats,
+        }
+    }
+
+
+# ── Upload ─────────────────────────────────────
+@app.post("/upload")
+async def upload_video(file: UploadFile = File(...), current_user: str = Depends(get_current_user)):
+    """Upload a video file for later analysis."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    
+    filename = f"{uuid.uuid4()}_{file.filename}"
+    save_path = os.path.join(UPLOAD_DIR, filename)
+    
+    content = await file.read()
+    with open(save_path, "wb") as f:
+        f.write(content)
+    
+    size_mb = round(len(content) / (1024 * 1024), 2)
+    logger.info(f"Uploaded: {filename} ({size_mb} MB)")
+    return {
+        "status": "uploaded",
+        "filename": filename,
+        "size_mb": size_mb
+    }
+
+
+# Frame throttle cache for browser cam (prevents CPU overload)
+_last_process_frame_time = 0.0
+_last_process_frame_result = None
+
+@app.post("/process_frame")
+async def process_frame(file: UploadFile = File(...), current_user: str = Depends(get_current_user)):
+    """Process a single frame and return JSON coordinates for client-side drawing."""
+    global _last_activity_time, _last_process_frame_time, _last_process_frame_result
+    
+    _last_activity_time = time.time()
+    
+    # PERF: Server-side frame throttle — if last detection was < 500ms ago,
+    # return cached result instantly to prevent CPU pile-up
+    now = time.time()
+    if _last_process_frame_result and (now - _last_process_frame_time) < 0.5:
+        return _last_process_frame_result
+    
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    
+    if frame is None:
+        return {"status": "error", "message": "Invalid image"}
+
+    if not detector._loaded:
+        detector.load()
+    
+    # PERF: Downscale large frames to 320px wide before detection
+    h, w = frame.shape[:2]
+    max_w = 640
+    if w > max_w:
+        scale = max_w / w
+        frame = cv2.resize(frame, (max_w, int(h * scale)), interpolation=cv2.INTER_NEAREST)
+        
+    # PERF: Use imgsz=640 + annotate=False for high-accuracy fast inference
+    result = detector.detect(frame, imgsz=640, annotate=False)
+    
+    if result.incidents:
+        run_agent_pipeline(result, source="browser_cam")
+
+    # Return only the detection data (super lightweight)
+    detections = []
+    for det in result.detections:
+        detections.append({
+            "box": det.bbox, # [x1, y1, x2, y2]
+            "label": det.class_name,
+            "conf": round(det.confidence, 2),
+            "type": det.incident_type
+        })
+    
+    response = {
+        "status": "success",
+        "detections": detections,
+        "incidents": result.incidents,
+        "person_count": result.person_count
+    }
+    
+    # Cache result for throttle
+    _last_process_frame_time = now
+    _last_process_frame_result = response
+    
+    return response
+
+
+# ── Analyze ────────────────────────────────────
+@app.post("/analyze")
+def analyze_video(filename: str = Query(...), current_user: str = Depends(get_current_user)):
+    """Analyze an uploaded video file and return a SINGLE consolidated summary."""
+    video_path = os.path.join(UPLOAD_DIR, filename)
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+
+    if not detector.is_loaded:
+        detector.load()
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise HTTPException(status_code=500, detail="Cannot open video file")
+
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    # Process ~1 frame per second of video for speed
+    sample_interval = max(int(fps), 1)
+
+    frame_idx = 0
+    analysed_count = 0
+    # Create gallery dir
+    gallery_dir = os.path.join(UPLOAD_DIR, "gallery", filename)
+    os.makedirs(gallery_dir, exist_ok=True)
+
+    # Consolidated stats
+    summary = {
+        "incident_counts": {},   # type -> times detected
+        "object_counts": {},     # class -> max count seen in any frame
+        "peak_crowd_size": 0,
+        "max_confidence": {},    # type -> highest confidence
+        "gallery_images": [],    # paths to key frames
+    }
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        if frame_idx % sample_interval == 0:
+            frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
+            result = detector.detect(frame)
+            analysed_count += 1
+
+            # Update summary icons/counts
+            if result.incidents:
+                # Save a screenshot if it's a new or high-conf incident
+                shot_name = f"inc_{frame_idx}.jpg"
+                shot_path = os.path.join(gallery_dir, shot_name)
+                if len(summary["gallery_images"]) < 12: # Limit gallery size
+                    cv2.imwrite(shot_path, result.annotated_frame)
+                    summary["gallery_images"].append(f"/media/gallery/{filename}/{shot_name}")
+
+                for inc in result.incidents:
+                    itype = inc["type"]
+                    summary["incident_counts"][itype] = summary["incident_counts"].get(itype, 0) + 1
+                    summary["max_confidence"][itype] = max(summary["max_confidence"].get(itype, 0), inc["confidence"])
+                    
+                    if itype == "crowd":
+                        summary["peak_crowd_size"] = max(summary["peak_crowd_size"], inc.get("count", 0))
+
+            # Update object counts
+            for det in result.detections:
+                summary["object_counts"][det.class_name] = max(summary["object_counts"].get(det.class_name, 0), 1)
+
+            # Optional: Dispatched limited events to store
+            if result.incidents:
+                run_agent_pipeline(result, source=f"upload:{filename}", frame_index=frame_idx)
+
+        frame_idx += 1
+
+    cap.release()
+
+    # Flatten max_confidence and counts for response
+    return {
+        "status": "complete",
+        "filename": filename,
+        "summary": summary,
+        "total_frames": total_frames,
+        "frames_analyzed": analysed_count,
+    }
+
+
+# ── Events API ─────────────────────────────────
+# (GET /events is defined once above, with authentication.)
+@app.get("/events/stats")
+async def get_stats(current_user: str = Depends(get_current_user)):
+    """Get aggregate event statistics."""
+    return event_store.get_stats()
+
+
+@app.post("/events/{event_id}/acknowledge")
+async def acknowledge_event(event_id: str, current_user: str = Depends(get_current_user)):
+    """Mark an event as acknowledged."""
+    success = event_store.acknowledge_event(event_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return {"status": "acknowledged", "event_id": event_id}
+
+
+# ── Sentinel Intelligence API ──────────────────
+@app.get("/sentinel/briefing/{event_id}")
+async def get_sentinel_briefing(
+    event_id: str,
+    db = Depends(get_db),
+    current_user: str = Depends(get_current_user),
+):
+    """Retrieve an evidence-backed Sentinel intelligence briefing for an incident."""
+    event_data = event_store.get_event(event_id)
+    if not event_data:
+        try:
+            db_events = db.get_events(limit=100)
+            for e in db_events:
+                if str(e.get("id")) == event_id:
+                    event_data = e
+                    break
+        except Exception:
+            pass
+
+    if not event_data:
+        raise HTTPException(status_code=404, detail=f"Incident '{event_id}' not found.")
+
+    briefing = sentinel_agent.generate_briefing(event_data)
+    return {"status": "success", "briefing": briefing}
+
+
+@app.get("/sentinel/export/{event_id}")
+async def export_sentinel_report(
+    event_id: str,
+    format: str = Query("json"),
+    db = Depends(get_db),
+    current_user: str = Depends(get_current_user),
+):
+    """Export a sanitized evidence dossier in JSON or standalone HTML."""
+    event_data = event_store.get_event(event_id)
+    if not event_data:
+        try:
+            db_events = db.get_events(limit=100)
+            for e in db_events:
+                if str(e.get("id")) == event_id:
+                    event_data = e
+                    break
+        except Exception:
+            pass
+
+    if not event_data:
+        raise HTTPException(status_code=404, detail=f"Incident '{event_id}' not found.")
+
+    if format == "html":
+        html_content = sentinel_agent.export_report_html(event_data)
+        return Response(
+            content=html_content,
+            media_type="text/html; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename=sentinel-dossier-{event_id}.html"},
+        )
+    else:
+        json_content = sentinel_agent.export_report_json(event_data)
+        return Response(
+            content=json_content,
+            media_type="application/json; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename=sentinel-dossier-{event_id}.json"},
+        )
+
+
+# ── System Status ──────────────────────────────
+
+
+
+# ── Static Dashboard (Must be last) ────────────
+dashboard_dir = os.path.join(BASE_DIR, "dashboard")
+if not os.path.isdir(dashboard_dir):
+    _repo_frontend = os.path.join(os.path.dirname(BASE_DIR), "frontend")
+    if os.path.isdir(_repo_frontend):
+        dashboard_dir = _repo_frontend
+if os.path.isdir(dashboard_dir):
+    app.mount("/", StaticFiles(directory=dashboard_dir, html=True), name="static_root")

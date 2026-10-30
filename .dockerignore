@@ -1,0 +1,27 @@
+.git
+.github
+__pycache__/
+**/__pycache__/
+*.pyc
+venv/
+**/venv*/
+.env
+backend/.env
+*.db
+backend/*.db
+uploads/
+backend/uploads/
+logs/
+backend/logs/
+backend/tests/
+.DS_Store
+**/.DS_Store
+credentials.json
+backend/credentials.json
+serviceAccountKey.json
+backend/serviceAccountKey.json
+# Exclude unused weight files so `railway up` uploads in seconds (only yolov8n.pt & fightdetection.h5 are used)
+backend/AI-model/yolov8m.pt
+backend/AI-model/exp-2.pt
+backend/AI-model/best.pt
+

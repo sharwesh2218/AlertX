@@ -1,0 +1,19 @@
+{
+  "name": "AlertX + Sentinel Codespace",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
+  "containerEnv": {
+    "TF_USE_LEGACY_KERAS": "1",
+    "TF_CPP_MIN_LOG_LEVEL": "2",
+    "PYTHONUNBUFFERED": "1"
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && pip install 'setuptools<81' wheel && pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && pip install 'tensorflow-cpu>=2.16.0' tf-keras && grep -v '^tensorflow' backend/requirements.txt > /tmp/reqs_cpu.txt && pip install --no-build-isolation -r /tmp/reqs_cpu.txt",
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": {
+      "label": "AlertX + Sentinel Full-Stack App",
+      "onAutoForward": "openBrowser",
+      "visibility": "public"
+    }
+  }
+}
+
