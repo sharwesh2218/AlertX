@@ -162,7 +162,8 @@ function showApp() {
     apiRequest('/auth/me').then(user => {
         document.getElementById('user-display').textContent = user.username;
     });
-    
+
+    loadDispatchSettings();
     initPolling();
 }
 
@@ -523,6 +524,9 @@ async function updateStatus() {
         if (statusDot) {
             statusDot.className = "status-dot status-dot--online";
             statusDot.style.background = "var(--online)";
+        }
+        if (data.dispatch) {
+            renderDispatchSettingsUI(data.dispatch);
         }
 
         const eventData = await apiRequest('/events?limit=100');
@@ -1334,6 +1338,184 @@ async function exportSentinelDossier(format) {
     }
 }
 
+// ── VAPI VOICE AI & ALERT PHONE DISPATCH ─────────
+function renderDispatchSettingsUI(cfg) {
+    if (!cfg) return;
+
+    const badge = document.getElementById('vapi-status-badge');
+    if (badge) {
+        if (cfg.vapi_configured) {
+            badge.textContent = "Vapi Ready";
+            badge.className = "badge badge--online";
+        } else {
+            badge.textContent = "Vapi Not Set";
+            badge.className = "badge badge--offline";
+        }
+    }
+
+    const phoneInput = document.getElementById('dispatch-phone-input');
+    if (phoneInput && document.activeElement !== phoneInput) {
+        const activePhone = cfg.dispatch_phone_number || safeGetStorage('alertx_dispatch_phone') || "";
+        phoneInput.value = activePhone;
+        if (cfg.dispatch_phone_number) {
+            safeSetStorage('alertx_dispatch_phone', cfg.dispatch_phone_number);
+        }
+    }
+
+    const phoneHint = document.getElementById('dispatch-phone-hint');
+    if (phoneHint && cfg.dispatch_phone_number) {
+        phoneHint.innerHTML = `Active dispatch target: <strong style="color: var(--online); font-family: 'JetBrains Mono', monospace;">${cfg.dispatch_phone_number}</strong>`;
+    }
+
+    const apiKeyInput = document.getElementById('vapi-api-key-input');
+    if (apiKeyInput && document.activeElement !== apiKeyInput && cfg.vapi_api_key_masked) {
+        apiKeyInput.placeholder = `Saved (${cfg.vapi_api_key_masked}) — paste new key to replace`;
+    }
+
+    const astInput = document.getElementById('vapi-assistant-id-input');
+    if (astInput && document.activeElement !== astInput && cfg.vapi_assistant_id !== undefined) {
+        astInput.value = cfg.vapi_assistant_id || "";
+    }
+
+    const phIdInput = document.getElementById('vapi-phone-id-input');
+    if (phIdInput && document.activeElement !== phIdInput && cfg.vapi_phone_number_id !== undefined) {
+        phIdInput.value = cfg.vapi_phone_number_id || "";
+    }
+}
+
+async function loadDispatchSettings() {
+    const cachedPhone = safeGetStorage('alertx_dispatch_phone');
+    const phoneInput = document.getElementById('dispatch-phone-input');
+    if (phoneInput && cachedPhone && !phoneInput.value) {
+        phoneInput.value = cachedPhone;
+    }
+
+    try {
+        const res = await apiRequest('/settings/dispatch');
+        renderDispatchSettingsUI(res);
+    } catch (err) {
+        console.warn("Could not load dispatch settings:", err);
+    }
+}
+
+async function saveDispatchPhone() {
+    const phoneInput = document.getElementById('dispatch-phone-input');
+    const saveBtn = document.getElementById('btn-save-phone');
+    if (!phoneInput) return;
+
+    const rawPhone = phoneInput.value.trim();
+    if (!rawPhone) {
+        showToast("Enter a phone number with '+' and country code (e.g. +919876543210).", "error");
+        phoneInput.focus();
+        return;
+    }
+
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saving...";
+    }
+    try {
+        const res = await apiRequest('/settings/dispatch', 'POST', {
+            dispatch_phone_number: rawPhone
+        });
+        safeSetStorage('alertx_dispatch_phone', res.dispatch_phone_number || rawPhone);
+        renderDispatchSettingsUI(res);
+        showToast(`Alert phone number saved: ${res.dispatch_phone_number}`, "success");
+    } catch (err) {
+        showToast(err.message || "Invalid phone number format", "error");
+    } finally {
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = "Save Number";
+        }
+    }
+}
+
+async function saveVapiCredentials() {
+    const apiKeyInput = document.getElementById('vapi-api-key-input');
+    const astInput = document.getElementById('vapi-assistant-id-input');
+    const phIdInput = document.getElementById('vapi-phone-id-input');
+    const phoneInput = document.getElementById('dispatch-phone-input');
+    const btn = document.getElementById('btn-save-vapi');
+
+    const payload = {
+        vapi_assistant_id: astInput ? astInput.value.trim() : undefined,
+        vapi_phone_number_id: phIdInput ? phIdInput.value.trim() : undefined,
+    };
+
+    if (apiKeyInput && apiKeyInput.value.trim()) {
+        payload.vapi_api_key = apiKeyInput.value.trim();
+    }
+    if (phoneInput && phoneInput.value.trim()) {
+        payload.dispatch_phone_number = phoneInput.value.trim();
+    }
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Connecting...";
+    }
+    try {
+        const res = await apiRequest('/settings/dispatch', 'POST', payload);
+        if (apiKeyInput) apiKeyInput.value = "";
+        renderDispatchSettingsUI(res);
+        if (res.vapi_configured) {
+            showToast("Vapi Voice AI connected and ready for emergency calls!", "success");
+            const drawer = document.getElementById('vapi-config-drawer');
+            if (drawer) drawer.open = false;
+        } else {
+            showToast("Saved partial Vapi settings. Fill all 3 Vapi IDs/Keys to enable calls.", "info");
+        }
+    } catch (err) {
+        showToast(err.message || "Failed to save Vapi settings", "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = "Save & Connect Vapi AI";
+        }
+    }
+}
+
+async function triggerEmergencyDispatch(service, btnEl) {
+    const phoneInput = document.getElementById('dispatch-phone-input');
+    const typedPhone = phoneInput ? phoneInput.value.trim() : "";
+    const targetPhone = typedPhone || safeGetStorage('alertx_dispatch_phone') || "";
+
+    if (!targetPhone) {
+        showToast("Enter an Alert Phone Number (with '+' country code, e.g. +919876543210) first.", "error");
+        if (phoneInput) phoneInput.focus();
+        return;
+    }
+
+    const labelEl = btnEl ? btnEl.querySelector('.dispatch-btn__label') : null;
+    const prevLabel = labelEl ? labelEl.textContent : "";
+    if (btnEl) btnEl.classList.add('is-calling');
+    if (labelEl) labelEl.textContent = "Calling...";
+
+    try {
+        const res = await apiRequest(`/dispatch/${service}`, 'POST', {
+            phone_number: targetPhone
+        });
+        if (res && res.destination) {
+            safeSetStorage('alertx_dispatch_phone', res.destination);
+            if (phoneInput) phoneInput.value = res.destination;
+            const phoneHint = document.getElementById('dispatch-phone-hint');
+            if (phoneHint) {
+                phoneHint.innerHTML = `Active dispatch target: <strong style="color: var(--online); font-family: 'JetBrains Mono', monospace;">${res.destination}</strong>`;
+            }
+        }
+        showToast(`📞 Calling ${res.destination || targetPhone} — AI Dispatching ${service.toUpperCase()}!`, "success");
+    } catch (err) {
+        showToast(err.message || "Emergency Protocol Error: Vapi AI call failed", "error");
+        if (err.message && err.message.toLowerCase().includes("vapi")) {
+            const drawer = document.getElementById('vapi-config-drawer');
+            if (drawer) drawer.open = true;
+        }
+    } finally {
+        if (btnEl) btnEl.classList.remove('is-calling');
+        if (labelEl) labelEl.textContent = prevLabel;
+    }
+}
+
 // ── LISTENERS ────────────────────────────────────
 
 function init() {
@@ -1443,18 +1625,24 @@ function init() {
         };
     }
 
+    // Alert Phone Number & Vapi Configuration listeners
+    addListener('btn-save-phone', 'onclick', () => saveDispatchPhone());
+    addListener('btn-save-vapi', 'onclick', () => saveVapiCredentials());
+    const phoneInputEl = document.getElementById('dispatch-phone-input');
+    if (phoneInputEl) {
+        phoneInputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                saveDispatchPhone();
+            }
+        });
+    }
+
     // Dispatch buttons logic
     document.querySelectorAll('.dispatch-btn').forEach(btn => {
         btn.onclick = () => {
             const service = btn.dataset.service;
-            fetch(`${API_BASE}/dispatch/${service}`, {
-                headers: token ? { 'Authorization': `Bearer ${token}` } : {}
-            })
-                .then(r => {
-                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                    showToast(`AI Voice Agent contacted ${service.toUpperCase()}`, "success");
-                })
-                .catch(() => showToast("Emergency Protocol Error: AI Agent unreachable", "error"));
+            triggerEmergencyDispatch(service, btn);
         };
     });
 

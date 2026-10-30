@@ -1,5 +1,6 @@
 .DS_Store
 .env
+.dispatch_config.json
 *.db
 __pycache__/
 logs/

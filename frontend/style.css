@@ -950,3 +950,94 @@ body {
         grid-template-columns: 1fr !important;
     }
 }
+
+/* ── VAPI VOICE DISPATCH CONFIGURATION ────────── */
+.vapi-label {
+    display: block;
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 0.45rem;
+}
+
+.vapi-drawer {
+    background: rgba(15, 23, 42, 0.35);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 1rem;
+    overflow: hidden;
+    transition: border-color 0.25s ease;
+}
+
+.vapi-drawer[open] {
+    border-color: rgba(99, 102, 241, 0.45);
+}
+
+.vapi-drawer__summary {
+    padding: 0.65rem 0.9rem;
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.vapi-drawer__summary::-webkit-details-marker {
+    display: none;
+}
+
+.vapi-drawer__summary::after {
+    content: '▾';
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    transition: transform 0.2s ease;
+}
+
+.vapi-drawer[open] .vapi-drawer__summary::after {
+    transform: rotate(180deg);
+}
+
+.vapi-drawer__body {
+    padding: 0.75rem 0.9rem 0.9rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.vapi-field label {
+    display: block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 0.25rem;
+}
+
+.vapi-field input {
+    width: 100%;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.55rem 0.75rem;
+    color: white;
+    font-size: 0.82rem;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.vapi-field input:focus {
+    border-color: var(--accent);
+    outline: none;
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.dispatch-btn.is-calling {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.14);
+    box-shadow: 0 0 18px rgba(16, 185, 129, 0.25);
+    pointer-events: none;
+    opacity: 0.9;
+}

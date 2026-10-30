@@ -13,7 +13,7 @@
     <!-- Leaflet Maps -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     
-    <link rel="stylesheet" href="style.css?v=2.1">
+    <link rel="stylesheet" href="style.css?v=2.2">
 </head>
 <body>
     
@@ -223,19 +223,55 @@
                                 </div>
 
                                 <div class="control-section">
-                                    <div class="section-title">Emergency AI Dispatch Protocol</div>
+                                    <div class="section-title" style="justify-content: space-between;">
+                                        <span>Emergency AI Dispatch Protocol</span>
+                                        <span class="badge badge--offline" id="vapi-status-badge">Vapi Not Set</span>
+                                    </div>
+
+                                    <div class="dispatch-phone-box" style="margin-bottom: 0.9rem;">
+                                        <label for="dispatch-phone-input" class="vapi-label">Alert Phone Number (Called on Dispatch)</label>
+                                        <div class="input-group">
+                                            <input type="tel" id="dispatch-phone-input" placeholder="+919876543210 or +14155552671">
+                                            <button class="btn btn--primary btn--sm" id="btn-save-phone" type="button">Save Number</button>
+                                        </div>
+                                        <p class="section-hint" id="dispatch-phone-hint" style="opacity: 0.75; font-style: normal; margin-top: 0.5rem;">
+                                            Include <strong>+</strong> and country code. Clicking any emergency button below calls this number via Vapi AI.
+                                        </p>
+                                    </div>
+
+                                    <details id="vapi-config-drawer" class="vapi-drawer">
+                                        <summary class="vapi-drawer__summary">⚙️ Connect / Change Vapi Voice AI Credentials</summary>
+                                        <div class="vapi-drawer__body">
+                                            <div class="vapi-field">
+                                                <label for="vapi-api-key-input">Vapi Private API Key</label>
+                                                <input type="password" id="vapi-api-key-input" placeholder="Paste Vapi Private Key" autocomplete="off">
+                                            </div>
+                                            <div class="vapi-field">
+                                                <label for="vapi-assistant-id-input">Vapi Assistant ID</label>
+                                                <input type="text" id="vapi-assistant-id-input" placeholder="e.g. a1b2c3d4-e5f6-7890-abcd-1234567890ab">
+                                            </div>
+                                            <div class="vapi-field">
+                                                <label for="vapi-phone-id-input">Vapi Phone Number ID</label>
+                                                <input type="text" id="vapi-phone-id-input" placeholder="e.g. f9e8d7c6-b5a4-3210-fedc-0987654321fe">
+                                            </div>
+                                            <button class="btn btn--primary btn--sm" id="btn-save-vapi" type="button" style="width: 100%; margin-top: 0.4rem;">
+                                                Save &amp; Connect Vapi AI
+                                            </button>
+                                        </div>
+                                    </details>
+
                                     <div class="dispatch-grid">
-                                        <button class="dispatch-btn" data-service="police">
+                                        <button class="dispatch-btn" data-service="police" type="button">
                                             <span class="icon">🚓</span>
-                                            <span class="dispatch-btn__label">Police</span>
+                                            <span class="dispatch-btn__label">Alert Police</span>
                                         </button>
-                                        <button class="dispatch-btn" data-service="ambulance">
+                                        <button class="dispatch-btn" data-service="ambulance" type="button">
                                             <span class="icon">🚑</span>
-                                            <span class="dispatch-btn__label">Ambulance</span>
+                                            <span class="dispatch-btn__label">Alert Ambulance</span>
                                         </button>
-                                        <button class="dispatch-btn" data-service="fire">
+                                        <button class="dispatch-btn" data-service="fire" type="button">
                                             <span class="icon">🚒</span>
-                                            <span class="dispatch-btn__label">Fire Dept</span>
+                                            <span class="dispatch-btn__label">Alert Fire Dept</span>
                                         </button>
                                     </div>
                                 </div>
@@ -464,6 +500,6 @@
     <!-- Scripts -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="config.js?v=1"></script>
-    <script src="app.js?v=2.1"></script>
+    <script src="app.js?v=2.2"></script>
 </body>
 </html>

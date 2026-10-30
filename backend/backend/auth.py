@@ -60,8 +60,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
 
 
-# ── Signed, expiring dispatch tokens (used by emailed "Call Police/Security/Ambulance" links) ──
-DISPATCH_SERVICES = {"police", "security", "ambulance"}
+# ── Signed, expiring dispatch tokens (used by emailed "Call Police/Security/Ambulance/Fire" links) ──
+DISPATCH_SERVICES = {"police", "security", "ambulance", "fire"}
 DISPATCH_TOKEN_TTL = 30 * 60  # 30 minutes
 
 

@@ -176,6 +176,7 @@ class AlertAgent(BaseAgent):
                 tok_police = make_dispatch_token("police")
                 tok_security = make_dispatch_token("security")
                 tok_ambulance = make_dispatch_token("ambulance")
+                tok_fire = make_dispatch_token("fire")
                 
                 alert_msg = f"""
                 <html>
@@ -198,8 +199,9 @@ class AlertAgent(BaseAgent):
                                     <h4 style="margin-bottom: 15px; text-align: center; color: #4b5563;">⚡ Voice Agent Dispatch</h4>
                                     <div style="text-align: center;">
                                         <a href="{main_module.PUBLIC_URL}/dispatch/police?t={tok_police}" style="display: inline-block; padding: 12px 15px; margin: 5px; background-color: #ef4444; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; width: 140px;">Call Police</a>
-                                        <a href="{main_module.PUBLIC_URL}/dispatch/security?t={tok_security}" style="display: inline-block; padding: 12px 15px; margin: 5px; background-color: #f59e0b; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; width: 140px;">Call Security</a>
                                         <a href="{main_module.PUBLIC_URL}/dispatch/ambulance?t={tok_ambulance}" style="display: inline-block; padding: 12px 15px; margin: 5px; background-color: #3b82f6; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; width: 140px;">Call Ambulance</a>
+                                        <a href="{main_module.PUBLIC_URL}/dispatch/fire?t={tok_fire}" style="display: inline-block; padding: 12px 15px; margin: 5px; background-color: #f97316; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; width: 140px;">Call Fire Dept</a>
+                                        <a href="{main_module.PUBLIC_URL}/dispatch/security?t={tok_security}" style="display: inline-block; padding: 12px 15px; margin: 5px; background-color: #f59e0b; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; width: 140px;">Call Security</a>
                                     </div>
                                 </div>
                                 

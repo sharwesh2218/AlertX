@@ -18,7 +18,7 @@ from io import BytesIO
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Depends, Response, Header
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Depends, Response, Header, Request
 import html as html_lib
 from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse, FileResponse
 import urllib3
@@ -55,7 +55,14 @@ from backend.config import (
 )
 from backend.event_store import EventStore
 from pipeline.frame_grabber import FrameGrabber
-from utils.vapi_service import trigger_ai_dispatch
+from utils.vapi_service import (
+    trigger_ai_dispatch,
+    get_dispatch_config,
+    get_public_dispatch_status,
+    save_dispatch_config,
+    normalize_phone_number,
+    get_last_dispatch_info,
+)
 from pipeline.detector import YOLODetector
 from agents.detection_agent import DetectionAgent
 from agents.threat_agent import ThreatAnalysisAgent
@@ -155,48 +162,138 @@ if not _alert_recipient:
     _alert_recipient = os.getenv("MAIL_RECIPIENT", "")
 
 
-@app.get("/dispatch/{service}")
+@app.api_route("/dispatch/{service}", methods=["GET", "POST"])
 async def dispatch_service(
     service: str,
+    request: Request,
     t: Optional[str] = Query(default=None),
+    phone: Optional[str] = Query(default=None),
+    format: Optional[str] = Query(default=None),
     authorization: Optional[str] = Header(default=None),
 ):
-    """Trigger AI Voice call to your personal number regarding a service."""
+    """Trigger AI Voice call to the configured alert phone number regarding a service."""
     service = service.lower()
     if service not in DISPATCH_SERVICES:
         raise HTTPException(status_code=404, detail="Unknown service")
 
+    is_jwt = verify_bearer_header(authorization)
+    is_email_tok = verify_dispatch_token(service, t)
+
     # Authorised by EITHER a signed expiring link token (emails) OR a dashboard bearer JWT
-    if not (verify_dispatch_token(service, t) or verify_bearer_header(authorization)):
+    if not (is_email_tok or is_jwt):
         raise HTTPException(status_code=403, detail="Invalid or expired dispatch token")
 
-    safe_service = html_lib.escape(service.upper())
-    safe_incident = html_lib.escape(str(_last_high_priority_event))
+    accept_hdr = (request.headers.get("accept") or "").lower()
+    wants_json = (
+        request.method == "POST"
+        or format == "json"
+        or "application/json" in accept_hdr
+        or (is_jwt and not t)
+    )
 
-    # Use your personal number for all alerts if set
-    target_number = DISPATCH_PHONE_NUMBER
-    
+    body_data: Dict = {}
+    if request.method == "POST":
+        try:
+            parsed_body = await request.json()
+            if isinstance(parsed_body, dict):
+                body_data = parsed_body
+        except Exception:
+            body_data = {}
+
+    # Authenticated dashboard operators may supply/update the phone number inline
+    target_number = ""
+    if is_jwt:
+        inline_phone = body_data.get("phone_number") if "phone_number" in body_data else phone
+        if inline_phone is not None and str(inline_phone).strip() != "":
+            try:
+                target_number = normalize_phone_number(str(inline_phone))
+                save_dispatch_config({"dispatch_phone_number": target_number})
+            except ValueError as ve:
+                raise HTTPException(status_code=400, detail=str(ve))
+
     if not target_number:
-        return HTMLResponse(content="""
+        cfg = get_dispatch_config()
+        target_number = cfg.get("dispatch_phone_number") or DISPATCH_PHONE_NUMBER
+
+    # Determine best incident context
+    incident_context = ""
+    if is_jwt and body_data.get("incident_details"):
+        incident_context = str(body_data["incident_details"]).strip()
+    elif _last_high_priority_event and _last_high_priority_event != "No recent incident recorded.":
+        incident_context = str(_last_high_priority_event)
+    else:
+        recent = event_store.get_events(limit=1)
+        if recent:
+            ev = recent[0]
+            ev_desc = ev.get("details") or ev.get("description") or ""
+            incident_context = f"{ev.get('priority', 'HIGH')} {str(ev.get('incident_type', 'incident')).upper()} ({ev_desc})".strip()
+        else:
+            incident_context = str(_last_high_priority_event)
+
+    safe_service = html_lib.escape(service.upper())
+    safe_incident = html_lib.escape(str(incident_context))
+
+    if not target_number:
+        no_num_msg = (
+            "No Alert Phone Number configured. Enter a destination phone number "
+            "(with '+' country code, e.g. +919876543210 or +14155552671) in the dashboard."
+        )
+        if wants_json:
+            raise HTTPException(status_code=400, detail=no_num_msg)
+        return HTMLResponse(
+            status_code=400,
+            content=f"""
             <html>
                 <body style="font-family: sans-serif; text-align: center; padding-top: 100px; background: #0a0a0f; color: white;">
-                    <h1 style="color: #ef4444;">❌ No Phone Number Set</h1>
-                    <p>Please add DISPATCH_PHONE_NUMBER to your .env file.</p>
+                    <h1 style="color: #ef4444;">❌ No Alert Phone Number Set</h1>
+                    <p>{html_lib.escape(no_num_msg)}</p>
                 </body>
             </html>
-        """)
+            """,
+        )
 
     success = trigger_ai_dispatch(
         service=service.upper(),
-        incident_details=_last_high_priority_event,
-        destination_number=target_number
+        incident_details=incident_context,
+        destination_number=target_number,
     )
-    
+    info = get_last_dispatch_info()
+
+    if not success:
+        err_detail = info.get("error") or (
+            "Vapi Voice AI dispatch failed. Verify VAPI_API_KEY, VAPI_ASSISTANT_ID, "
+            "and VAPI_PHONE_NUMBER_ID in the dashboard or backend/.env."
+        )
+        if wants_json:
+            raise HTTPException(status_code=502, detail=err_detail)
+        return HTMLResponse(
+            status_code=502,
+            content=f"""
+            <html>
+                <body style="font-family: sans-serif; text-align: center; padding-top: 100px; background: #0a0a0f; color: white;">
+                    <h1 style="color: #ef4444;">❌ Voice Dispatch Failed</h1>
+                    <p style="max-width: 560px; margin: 12px auto; color: #fca5a5;">{html_lib.escape(err_detail)}</p>
+                    <button onclick="window.close()" style="padding: 10px 20px; border-radius: 5px; cursor: pointer;">Close Window</button>
+                </body>
+            </html>
+            """,
+        )
+
+    safe_dest = html_lib.escape(target_number)
+    if wants_json:
+        return {
+            "status": "success",
+            "service": service.upper(),
+            "destination": target_number,
+            "call_id": info.get("call_id", ""),
+            "incident": incident_context,
+        }
+
     return HTMLResponse(content=f"""
         <html>
             <body style="font-family: sans-serif; text-align: center; padding-top: 100px; background: #0a0a0f; color: white;">
                 <h1 style="color: #4ade80;">✅ Dispatch Triggered!</h1>
-                <p>AI Voice Agent is calling the {safe_service} now.</p>
+                <p>AI Voice Agent is calling <strong>{safe_dest}</strong> for <strong>{safe_service}</strong> response now.</p>
                 <p style="color: #8b8ba3; font-size: 0.8rem;">Incident: {safe_incident}</p>
                 <button onclick="window.close()" style="padding: 10px 20px; border-radius: 5px; cursor: pointer;">Close Window</button>
             </body>
@@ -302,6 +399,39 @@ async def update_alert_recipient(email: str = Query(...), current_user: str = De
     with open(".recipient", "w") as f:
         f.write(_alert_recipient)
     return {"status": "success", "recipient": _alert_recipient}
+
+
+class DispatchSettingsRequest(BaseModel):
+    dispatch_phone_number: Optional[str] = None
+    vapi_api_key: Optional[str] = None
+    vapi_assistant_id: Optional[str] = None
+    vapi_phone_number_id: Optional[str] = None
+
+
+@app.get("/settings/dispatch")
+async def read_dispatch_settings(current_user: str = Depends(get_current_user)):
+    """Return current alert destination phone number and masked Vapi status."""
+    return {"status": "success", **get_public_dispatch_status()}
+
+
+@app.post("/settings/dispatch")
+async def update_dispatch_settings(
+    payload: DispatchSettingsRequest,
+    current_user: str = Depends(get_current_user),
+):
+    """Save alert destination phone number and/or Vapi credentials persistently."""
+    try:
+        updated = save_dispatch_config(
+            {
+                "dispatch_phone_number": payload.dispatch_phone_number,
+                "vapi_api_key": payload.vapi_api_key,
+                "vapi_assistant_id": payload.vapi_assistant_id,
+                "vapi_phone_number_id": payload.vapi_phone_number_id,
+            }
+        )
+        return {"status": "success", **updated}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
 
 
 def _bg_agent_task(frame_result, source, frame_index, recipient):
@@ -590,6 +720,7 @@ async def system_status(current_user: str = Depends(get_current_user)):
         "model_loaded": detector.is_loaded,
         "weapon_model": detector.weapon_ok,
         "alert_recipient": _alert_recipient,
+        "dispatch": get_public_dispatch_status(),
         "db_mode": "Cloud (Firebase)",
         "last_sync": datetime.now().isoformat(),
         "agents": {
