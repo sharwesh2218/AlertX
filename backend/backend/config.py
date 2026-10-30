@@ -6,7 +6,8 @@ Centralizes all tunable parameters, paths, and thresholds.
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables from .env file (check both backend/.env and current working dir)
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 load_dotenv()
 
 # ──────────────────────────────────────────────

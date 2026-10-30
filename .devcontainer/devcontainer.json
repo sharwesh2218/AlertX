@@ -6,7 +6,7 @@
     "TF_CPP_MIN_LOG_LEVEL": "2",
     "PYTHONUNBUFFERED": "1"
   },
-  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && pip install 'setuptools<81' wheel && pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && pip install 'tensorflow-cpu>=2.16.0' tf-keras && grep -v '^tensorflow' backend/requirements.txt > /tmp/reqs_cpu.txt && pip install --no-build-isolation -r /tmp/reqs_cpu.txt",
+  "postCreateCommand": "sudo rm -f /etc/apt/sources.list.d/yarn.list 2>/dev/null || true; (sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0) || true; python3 -m pip install --upgrade 'setuptools<81' wheel 'numpy>=1.24.0,<2.0.0' && python3 -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && python3 -m pip install 'tensorflow-cpu>=2.16.0,<2.19.0' && python3 -m pip install --no-deps 'tf-keras>=2.16.0,<2.19.0' && grep -Ev '^(tensorflow|tf-keras|torch|torchvision)' backend/requirements.txt > /tmp/reqs_cpu.txt && python3 -m pip install --no-build-isolation -r /tmp/reqs_cpu.txt && (python3 -m pip uninstall -y opencv-python opencv-python-headless || true) && python3 -m pip install --no-deps opencv-python-headless==4.10.0.84",
   "forwardPorts": [8000],
   "portsAttributes": {
     "8000": {
@@ -16,4 +16,3 @@
     }
   }
 }
-
