@@ -4,6 +4,13 @@
 
 ---
 
+
+## 🚀 Live Demo
+
+**Hosted Application:** [Click Here to Open AlertX](https://miserable-gravestone-69xgvrprxg9934469-8000.app.github.dev)
+
+
+
 ## 🏛️ System Architecture
 
 ```text
@@ -86,6 +93,8 @@ repo-root/
 ---
 
 ## 🚀 Deployment
+
+
 
 For step-by-step production setup, environment variable requirements, and troubleshooting, read **[DEPLOY.md](./DEPLOY.md)**.
 
